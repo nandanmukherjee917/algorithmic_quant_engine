@@ -1,0 +1,30 @@
+# =============================================================================
+# High-Frequency Macro Algorithmic Arbitrage Engine
+# Production Dependency Lockfile
+# =============================================================================
+# Pin exact versions to guarantee reproducible numerical results across
+# deployment environments. Floating-point behavior in numpy/scipy linear
+# algebra routines (BLAS/LAPACK backends) can shift subtly between minor
+# versions, which is unacceptable for a quantitative risk engine.
+# =============================================================================
+
+flask==3.0.3
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.5.1
+scipy==1.13.1
+
+# -----------------------------------------------------------------------------
+# Transitive / supporting production dependencies (explicitly pinned rather
+# than left to resolver drift, per production hardening policy).
+# -----------------------------------------------------------------------------
+Werkzeug==3.0.3
+Jinja2==3.1.4
+itsdangerous==2.2.0
+click==8.1.7
+blinker==1.8.2
+python-dateutil==2.9.0.post0
+pytz==2024.1
+tzdata==2024.1
+joblib==1.4.2
+threadpoolctl==3.5.0

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARBITRAGE // High-Frequency Macro Quant Engine</title>
+
+    <!-- Typography: display/label face + monospace data face -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Chart rendering library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js" defer></script>
+
+    <!-- View layer presentation tokens -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+    <!-- =================================================================
+         AMBIENT BACKDROP LAYER (pure decoration, no structural content)
+         ================================================================= -->
+    <div class="backdrop-grid" aria-hidden="true"></div>
+
+    <div class="terminal-shell">
+
+        <!-- =============================================================
+             HEADER: SYSTEM IDENTITY + LIVE STATUS STRIP
+             ============================================================= -->
+        <header class="terminal-header">
+            <div class="header-brand">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 32 32" width="28" height="28">
+                        <polyline points="2,24 9,14 14,19 22,7 30,12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </span>
+                <div class="brand-text">
+                    <h1>ARBITRAGE&nbsp;ENGINE</h1>
+                    <p class="brand-subtitle">High-Frequency Macro Algorithmic Quant Core</p>
+                </div>
+            </div>
+
+            <div class="header-status" id="headerStatus">
+                <div class="status-item">
+                    <span class="status-dot" id="connectionDot"></span>
+                    <span id="connectionLabel">CONNECTING&hellip;</span>
+                </div>
+                <div class="status-item status-item--divider">
+                    <span class="status-label">RECORDS</span>
+                    <span class="status-value" id="recordCountValue">&mdash;</span>
+                </div>
+                <div class="status-item status-item--divider">
+                    <span class="status-label">LAST TICK</span>
+                    <span class="status-value" id="lastTickValue">&mdash;</span>
+                </div>
+                <div class="status-item status-item--divider">
+                    <span class="status-label">COMPUTE</span>
+                    <span class="status-value" id="computeTimeValue">&mdash;</span>
+                </div>
+                <div class="status-item status-item--clock">
+                    <span class="status-value" id="liveClock">00:00:00</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- =============================================================
+             KPI STRIP
+             ============================================================= -->
+        <section class="kpi-strip" aria-label="Key performance indicators">
+
+            <!-- Signature element: fuzzy risk gauge -->
+            <article class="kpi-card kpi-card--gauge" id="riskGaugeCard">
+                <div class="kpi-card-label">FUZZY RISK ASSET SCORE</div>
+                <div class="gauge-wrap">
+                    <svg viewBox="0 0 200 120" class="risk-gauge" id="riskGaugeSvg" aria-hidden="true">
+                        <path class="gauge-track" d="M 20 110 A 80 80 0 0 1 180 110" />
+                        <path class="gauge-fill" id="gaugeFillLow" d="M 20 110 A 80 80 0 0 1 60 40.72" />
+                        <path class="gauge-fill gauge-fill--med" id="gaugeFillMed" d="M 60 40.72 A 80 80 0 0 1 140 40.72" />
+                        <path class="gauge-fill gauge-fill--high" id="gaugeFillHigh" d="M 140 40.72 A 80 80 0 0 1 180 110" />
+                        <line class="gauge-needle" id="gaugeNeedle" x1="100" y1="110" x2="100" y2="40" transform="rotate(-90 100 110)" />
+                        <circle class="gauge-pivot" cx="100" cy="110" r="5" />
+                    </svg>
+                    <div class="gauge-readout" id="riskScoreValue">&mdash;</div>
+                </div>
+                <div class="gauge-legend">
+                    <span class="legend-chip legend-chip--low">LOW</span>
+                    <span class="legend-chip legend-chip--med">MEDIUM</span>
+                    <span class="legend-chip legend-chip--high">HIGH</span>
+                </div>
+            </article>
+
+            <article class="kpi-card" id="driftCard">
+                <div class="kpi-card-label">DRIFT VELOCITY &middot; &mu;</div>
+                <div class="kpi-card-value" id="driftValue">&mdash;</div>
+                <div class="kpi-card-sub" id="driftSub">MLE analytical estimator</div>
+            </article>
+
+            <article class="kpi-card" id="volCard">
+                <div class="kpi-card-label">VOLATILITY BOUNDS &middot; &sigma;</div>
+                <div class="kpi-card-value" id="volValue">&mdash;</div>
+                <div class="kpi-card-sub" id="volSub">Annualized stochastic bound</div>
+            </article>
+
+            <article class="kpi-card" id="interceptCard">
+                <div class="kpi-card-label">MATRIX INTERCEPT &middot; &beta;&#8320;</div>
+                <div class="kpi-card-value" id="interceptValue">&mdash;</div>
+                <div class="kpi-card-sub" id="interceptSub">Custom closed-form ridge fit</div>
+            </article>
+        </section>
+
+        <!-- =============================================================
+             PRIMARY VISUALIZATION GRID
+             ============================================================= -->
+        <section class="viz-grid" aria-label="Analytical visualizations">
+
+            <article class="panel panel--forecast">
+                <div class="panel-header">
+                    <h2>GBM SDE FORECAST &middot; EULER&ndash;MARUYAMA MULTI-PATH</h2>
+                    <span class="panel-badge" id="forecastBadge">200 PATHS</span>
+                </div>
+                <div class="panel-chart-wrap panel-chart-wrap--tall">
+                    <canvas id="sdeForecastChart"></canvas>
+                </div>
+            </article>
+
+            <article class="panel panel--allocation">
+                <div class="panel-header">
+                    <h2>PORTFOLIO ALLOCATION</h2>
+                    <span class="panel-badge" id="allocationBadge">MIN-VAR</span>
+                </div>
+                <div class="panel-chart-wrap">
+                    <canvas id="allocationPieChart"></canvas>
+                </div>
+                <div class="panel-footnote" id="allocationFootnote">Solving&hellip;</div>
+            </article>
+
+            <article class="panel panel--velocity">
+                <div class="panel-header">
+                    <h2>RAW VELOCITY TICKER</h2>
+                    <span class="panel-badge panel-badge--live" id="velocityBadge">LIVE</span>
+                </div>
+                <div class="panel-chart-wrap">
+                    <canvas id="rawVelocityTickerChart"></canvas>
+                </div>
+            </article>
+        </section>
+
+        <!-- =============================================================
+             ANALYTICAL DETAIL FOOTER
+             ============================================================= -->
+        <section class="detail-grid" aria-label="Analytical detail panels">
+
+            <article class="panel panel--detail">
+                <div class="panel-header">
+                    <h2>RIDGE REGRESSION COEFFICIENTS</h2>
+                    <span class="panel-badge" id="ridgeBadge">&alpha; &mdash;</span>
+                </div>
+                <table class="data-table" id="ridgeTable">
+                    <thead>
+                        <tr><th>FEATURE</th><th>&beta; COEFFICIENT</th></tr>
+                    </thead>
+                    <tbody id="ridgeTableBody">
+                        <tr><td colspan="2" class="table-loading">Awaiting first computation&hellip;</td></tr>
+                    </tbody>
+                </table>
+                <div class="panel-footnote" id="ridgeRSquared">R&sup2; &mdash;</div>
+            </article>
+
+            <article class="panel panel--detail">
+                <div class="panel-header">
+                    <h2>FUZZY MEMBERSHIP DEGREES</h2>
+                    <span class="panel-badge">MAMDANI</span>
+                </div>
+                <div class="membership-columns" id="membershipColumns">
+                    <div class="membership-col">
+                        <div class="membership-col-title">VOLATILITY</div>
+                        <div class="membership-bar" data-term="low"><span class="membership-bar-label">LOW</span><div class="membership-bar-track"><div class="membership-bar-fill" id="volMembershipLow"></div></div></div>
+                        <div class="membership-bar" data-term="medium"><span class="membership-bar-label">MED</span><div class="membership-bar-track"><div class="membership-bar-fill" id="volMembershipMed"></div></div></div>
+                        <div class="membership-bar" data-term="high"><span class="membership-bar-label">HIGH</span><div class="membership-bar-track"><div class="membership-bar-fill" id="volMembershipHigh"></div></div></div>
+                    </div>
+                    <div class="membership-col">
+                        <div class="membership-col-title">DEMAND DENSITY</div>
+                        <div class="membership-bar" data-term="low"><span class="membership-bar-label">LOW</span><div class="membership-bar-track"><div class="membership-bar-fill" id="demMembershipLow"></div></div></div>
+                        <div class="membership-bar" data-term="medium"><span class="membership-bar-label">MED</span><div class="membership-bar-track"><div class="membership-bar-fill" id="demMembershipMed"></div></div></div>
+                        <div class="membership-bar" data-term="high"><span class="membership-bar-label">HIGH</span><div class="membership-bar-track"><div class="membership-bar-fill" id="demMembershipHigh"></div></div></div>
+                    </div>
+                </div>
+            </article>
+
+            <article class="panel panel--detail">
+                <div class="panel-header">
+                    <h2>DATASET &amp; SYSTEM STATUS</h2>
+                    <span class="panel-badge" id="systemBadge">NOMINAL</span>
+                </div>
+                <ul class="stat-list" id="statList">
+                    <li><span>Simulated Records</span><strong id="statRecords">&mdash;</strong></li>
+                    <li><span>SDE Sample Paths</span><strong id="statPaths">&mdash;</strong></li>
+                    <li><span>Portfolio Volatility</span><strong id="statPortfolioVol">&mdash;</strong></li>
+                    <li><span>Expected Return</span><strong id="statExpectedReturn">&mdash;</strong></li>
+                    <li><span>Polling Interval</span><strong id="statPollInterval">4.0s</strong></li>
+                    <li><span>Total Requests</span><strong id="statRequestCount">0</strong></li>
+                </ul>
+            </article>
+        </section>
+
+        <footer class="terminal-footer">
+            <span>ARBITRAGE ENGINE &middot; MODEL CORE v1.0 &middot; SIMULATED DATA &mdash; NOT INVESTMENT ADVICE</span>
+        </footer>
+    </div>
+
+    <!-- Client operations script -->
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
+</body>
+</html>
