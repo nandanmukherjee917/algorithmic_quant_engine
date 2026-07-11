@@ -184,15 +184,11 @@ The engine estimates drift and volatility parameters assuming a Geometric Browni
 
 Model:
 
-\[
-\log\left(\frac{S_{t+1}}{S_t}\right)
-\sim
-\mathcal{N}
-\left(
-(\mu-\frac12\sigma^2)\Delta t,
-\sigma^2\Delta t
-\right)
-\]
+```text
+log(S(t+1) / S(t))
+~
+N( (μ − ½σ²)Δt , σ²Δt )
+```
 
 Estimated Parameters
 
@@ -211,23 +207,20 @@ Outputs
 
 The future asset price is simulated using
 
-\[
-S_{t+1}
-=
-S_t
-+
-\mu S_t\Delta t
-+
-\sigma S_t
-\sqrt{\Delta t}
-Z_t
-\]
+The Euler–Maruyama discretization is
+
+```text
+S(t+1) =
+S(t)
++ μS(t)Δt
++ σS(t)√Δt Z
+```
 
 where
 
-\[
-Z_t\sim N(0,1)
-\]
+```text
+Z ~ N(0,1)
+```
 
 Forecast Horizon
 
@@ -250,11 +243,9 @@ S>10^{-8}
 
 Closed-form solution
 
-\[
-\beta=
-(X^TX+\alpha I)^{-1}
-X^Ty
-\]
+```text
+β = (XᵀX + αI)⁻¹ Xᵀy
+```
 
 Features
 
@@ -281,21 +272,21 @@ Objective
 
 Minimize
 
-\[
-w^T\Sigma w
-\]
+```text
+wᵀΣw
+```
 
 Subject to
 
-\[
-\sum_i w_i=1
-\]
+```text
+Σwi = 1
+```
 
 and
 
-\[
-0\le w_i\le1
-\]
+```text
+0 ≤ wi ≤ 1
+```
 
 Outputs
 
@@ -354,12 +345,11 @@ AND
 
 Centroid Method
 
-\[
-R=
-\frac
-{\int x\mu(x)\,dx}
-{\int\mu(x)\,dx}
-\]
+```text
+             ∫ x μ(x) dx
+Risk = -------------------------
+          ∫ μ(x) dx
+```
 
 Output
 
@@ -408,8 +398,8 @@ Moore–Penrose Pseudo Inverse
 
 Hard lower boundary
 
-```
-Price ≥ 1e-8
+```text
+Price ≥ 1 × 10⁻⁸
 ```
 
 ---
@@ -504,7 +494,7 @@ Mathematics
 ## Clone Repository
 
 ```bash
-git clone https://github.com/yourusername/algorithmic_quant_engine.git
+git clone https://github.com/nandanmukherjee917/algorithmic_quant_engine.git
 
 cd algorithmic_quant_engine
 ```
@@ -627,6 +617,9 @@ Major concepts include
 
 # Author
 
-**Algorithmic Quant Engine**
+## Nandan Mukherjee
 
-A quantitative finance platform demonstrating the integration of mathematical modeling, stochastic simulation, optimization, and intelligent decision systems within a modern MVC web architecture.
+Artificial Intelligence & Machine Learning Undergraduate  
+Quantitative Finance and Theoretical Physics Enthusiast | Aspiring Machine Learning Engineer |
+
+This project demonstrates the integration of stochastic calculus, optimization theory, statistical estimation, fuzzy inference systems, and modern web technologies into a unified quantitative finance platform built using Python, Flask, and the MVC architecture.
