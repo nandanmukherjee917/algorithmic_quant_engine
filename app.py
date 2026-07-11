@@ -3,6 +3,9 @@ app.py
 ==============================================================================
 THE ENTERPRISE CORE CONTROLLER GATEWAY
 ==============================================================================
+SPDX-License-Identifier: Apache-2.0
+Copyright 2026 [your name or organization]. See LICENSE for full terms.
+==============================================================================
 
 Flask REST API layer (Controller) for the High-Frequency Macro Algorithmic
 Arbitrage Engine. This module deliberately contains zero mathematical logic
@@ -29,6 +32,7 @@ For production, run behind a real WSGI server, e.g.:
 
 import functools
 import logging
+import os
 import sys
 import time
 import traceback
@@ -76,11 +80,31 @@ compute_executor = ThreadPoolExecutor(
 # ENGINE INSTANTIATION + PRE-WARM
 # --------------------------------------------------------------------------- #
 # The engine is instantiated at import time and pre-warmed immediately --
-# i.e. its multi-gigabyte-style synthetic dataset pool is generated once,
-# eagerly, before the application ever accepts a request. This guarantees
-# the very first inbound HTTP request never pays the (relatively) expensive
-# dataset-generation cost synchronously inside the request/response cycle.
+# i.e. its dataset pool is generated once, eagerly, before the application
+# ever accepts a request. This guarantees the very first inbound HTTP
+# request never pays the (relatively) expensive dataset-generation cost
+# synchronously inside the request/response cycle.
+#
+# DATA_MODE is environment-driven rather than hardcoded, so the same code
+# runs a fully offline synthetic demo by default (no external dependency,
+# no risk of a broken build if Yahoo Finance is unreachable) or a real
+# market-data mode when explicitly opted into:
+#
+#     QUANT_DATA_MODE=real QUANT_TICKER=AAPL python app.py
+#
+# If real-data mode fails for any reason (no network, invalid ticker,
+# yfinance missing), AdvancedQuantEngine.warm_up() automatically falls
+# back to synthetic mode -- see quant_model.py -- so this never blocks
+# application boot.
 # --------------------------------------------------------------------------- #
+DATA_MODE = os.environ.get("QUANT_DATA_MODE", "synthetic").strip().lower()
+DEFAULT_TICKER = os.environ.get("QUANT_TICKER", "AAPL").strip().upper()
+PORTFOLIO_TICKERS = [
+    t.strip().upper()
+    for t in os.environ.get("QUANT_PORTFOLIO_TICKERS", "AAPL,MSFT,GOOGL,AMZN").split(",")
+    if t.strip()
+]
+
 quant_engine = AdvancedQuantEngine(
     n_records=125_000,
     n_sde_paths=200,
@@ -90,12 +114,23 @@ quant_engine = AdvancedQuantEngine(
 
 try:
     _boot_start = time.perf_counter()
-    quant_engine.warm_up()
+    quant_engine.warm_up(mode=DATA_MODE, ticker=DEFAULT_TICKER)
+
+    if DATA_MODE == "real":
+        try:
+            quant_engine.set_multi_asset_universe(PORTFOLIO_TICKERS)
+        except QuantEngineError as exc:
+            logger.warning(
+                "Boot: real multi-asset portfolio universe unavailable "
+                "(%s); portfolio optimizer will use synthetic tiers "
+                "instead.", exc,
+            )
+
     _boot_elapsed = time.perf_counter() - _boot_start
     logger.info(
         "Boot sequence complete: AdvancedQuantEngine pre-warmed with %d "
-        "synthetic records in %.4fs.",
-        quant_engine.n_records, _boot_elapsed,
+        "records in %.4fs (mode=%s, data_source=%s).",
+        quant_engine.n_records, _boot_elapsed, DATA_MODE, quant_engine._data_source,
     )
 except QuantEngineError:
     # A failure to warm up the engine at boot is fatal -- there is no
@@ -274,6 +309,65 @@ def compute_quant_matrix():
             "error": "INTERNAL_SERVER_ERROR",
             "message": "An unexpected error occurred while computing the "
                        "quantitative matrix.",
+        }), 500
+
+
+@app.route("/api/stock-chart", methods=["GET"])
+@logged_route("stock_chart")
+def stock_chart():
+    """
+    Fetches real OHLCV bar data for a single ticker, for the frontend's
+    stock price/volume chart. Independent of the main analytical pipeline
+    -- this route works regardless of whether the engine itself is
+    running in synthetic or real-data mode.
+
+    Query Parameters:
+        ticker (str, optional): ticker symbol, default "AAPL".
+        period (str, optional): yfinance lookback window, default "6mo".
+        interval (str, optional): yfinance bar size, default "1d".
+
+    Returns:
+        flask.Response: JSON {"ticker", "bars", "currency"} (200), or a
+        structured JSON error (400/500) if the fetch fails.
+    """
+    ticker = request.args.get("ticker", default="AAPL", type=str).strip().upper()
+    period = request.args.get("period", default="6mo", type=str).strip()
+    interval = request.args.get("interval", default="1d", type=str).strip()
+
+    if not ticker or len(ticker) > 12 or not ticker.replace(".", "").replace("-", "").isalnum():
+        return jsonify({
+            "error": "INVALID_PARAMETER",
+            "message": "ticker must be a short alphanumeric symbol (e.g. AAPL, BRK-B).",
+        }), 400
+
+    try:
+        future = compute_executor.submit(
+            quant_engine.fetch_ohlcv_for_chart, ticker, period, interval
+        )
+        try:
+            payload = future.result(timeout=COMPUTE_TIMEOUT_SECONDS)
+        except FutureTimeoutError:
+            return jsonify({
+                "error": "COMPUTE_TIMEOUT",
+                "message": f"Chart data fetch exceeded {COMPUTE_TIMEOUT_SECONDS}s.",
+            }), 504
+
+        return jsonify(payload), 200
+
+    except QuantEngineError as exc:
+        logger.error("stock_chart: engine-level failure for '%s': %s", ticker, exc)
+        return jsonify({
+            "error": "STOCK_DATA_UNAVAILABLE",
+            "message": str(exc),
+        }), 502
+    except Exception as exc:
+        logger.error(
+            "stock_chart: unexpected failure for '%s': %s\n%s",
+            ticker, exc, traceback.format_exc(),
+        )
+        return jsonify({
+            "error": "INTERNAL_SERVER_ERROR",
+            "message": "An unexpected error occurred while fetching chart data.",
         }), 500
 
 

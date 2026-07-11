@@ -1,29 +1,104 @@
-# Byte-compiled / optimized / DLL files
+# =============================================================================
+# .gitignore
+# High-Frequency Macro Algorithmic Arbitrage Engine
+# =============================================================================
+
+# ---- Python ----
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Environments
-.venv/
+# ---- Virtual environments ----
 venv/
-ENV/
 env/
-.env
+ENV/
+.venv/
+.env/
+env.bak/
+venv.bak/
 
-# IDEs and editors
+# ---- Environment variables / secrets ----
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ---- Flask ----
+instance/
+.webassets-cache
+flask_session/
+
+# ---- Testing / coverage ----
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# ---- Jupyter (in case of exploratory notebooks) ----
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ---- Logs ----
+*.log
+logs/
+flask_app.log
+
+# ---- OS-specific ----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ---- Editor / IDE ----
 .vscode/
 .idea/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
 *.swp
+*.swo
+*~
+.project
+.pydevproject
+*.sublime-project
+*.sublime-workspace
 
-# OS generated files
-.DS_Store
-Thumbs.db
+# ---- Node (if any frontend tooling gets added later) ----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Data and Logs
-*.log
-data/raw/
-data/processed/
+# ---- Static build artifacts (if bundling is added later) ----
+static/dist/
+static/.cache/
+
+# ---- Misc ----
+*.bak
+*.tmp
+.cache/

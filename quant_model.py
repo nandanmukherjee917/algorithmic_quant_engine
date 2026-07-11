@@ -3,6 +3,9 @@ quant_model.py
 ==============================================================================
 THE DEEP QUANTITATIVE ENGINE
 ==============================================================================
+SPDX-License-Identifier: Apache-2.0
+Copyright 2026 [your name or organization]. See LICENSE for full terms.
+==============================================================================
 
 This module houses `AdvancedQuantEngine`, the mathematical core (Model layer)
 of the High-Frequency Macro Algorithmic Arbitrage Engine. It is intentionally
@@ -44,6 +47,18 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
+
+# yfinance is an OPTIONAL dependency, used only by generate_real_dataset().
+# The engine must remain fully functional in synthetic mode even if it is
+# not installed (e.g. offline demos, CI environments with no internet
+# egress), so the import failure is caught here rather than raised at
+# module load time.
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    yf = None
+    YFINANCE_AVAILABLE = False
 
 # ------------------------------------------------------------------------- #
 # Module-level logger. The controller (app.py) configures logging handlers;
@@ -132,6 +147,8 @@ class AdvancedQuantEngine:
         self.dataset = None
         self._is_warmed = False
         self._last_warm_duration_sec = None
+        self._data_source = "synthetic"
+        self._multi_asset_universe = None  # set by set_multi_asset_universe()
 
         logger.info(
             "AdvancedQuantEngine instantiated (n_records=%d, "
@@ -273,28 +290,375 @@ class AdvancedQuantEngine:
                 f"Failed to generate simulated dataset: {exc}"
             ) from exc
 
-    def warm_up(self):
+    # --------------------------------------------------------------------- #
+    # 1b. REAL MARKET DATA INGESTION (optional -- requires `yfinance`)
+    # --------------------------------------------------------------------- #
+    def generate_real_dataset(self, ticker="AAPL", period="2y", interval="1d"):
+        """
+        Fetches real historical OHLCV data for a single equity ticker via
+        Yahoo Finance (through the `yfinance` package) and maps it onto the
+        SAME internal schema used by `generate_simulated_dataset`, so every
+        downstream method (MLE, SDE solver, ridge regression, fuzzy
+        inference, portfolio optimizer) works completely unmodified,
+        regardless of whether the engine is running in synthetic or
+        real-data mode.
+
+        Column mapping (synthetic name -> real-data meaning):
+            base_price_ticker   -> actual daily Close price
+            passenger_velocity  -> normalized trading volume (demand-density
+                                    proxy: higher volume = higher "velocity")
+            matrix_distance     -> intraday range, (High - Low) / Close * 100
+                                    (a volatility-tiering proxy, replacing
+                                    the original trip-distance tiering)
+            surcharges          -> abs(daily return) * 100 (a same-day
+                                    price-shock magnitude proxy)
+
+        Args:
+            ticker (str): a valid ticker symbol, e.g. "AAPL", "MSFT",
+                "GOOGL". Passed straight through to yfinance.
+            period (str): yfinance lookback window, e.g. "1mo", "6mo",
+                "1y", "2y", "5y", "max".
+            interval (str): bar size, e.g. "1d", "1h", "5m". Intraday
+                intervals are limited by Yahoo Finance to short lookback
+                windows (e.g. "5m" only supports ~60 days of history).
+
+        Returns:
+            pandas.DataFrame: the mapped dataset, also cached on
+            `self.dataset`. `self.n_records` is updated to the real row
+            count returned by Yahoo Finance (which will be far smaller
+            than the synthetic engine's default of 125,000).
+
+        Raises:
+            QuantEngineError: if `yfinance` is not installed, the network
+                request fails, the ticker is invalid/delisted, or too few
+                rows are returned to support stable downstream statistics
+                (minimum 40 rows, to leave enough data for the 4-way
+                distance-tier quantile bucketing used later).
+        """
+        if not YFINANCE_AVAILABLE:
+            raise QuantEngineError(
+                "yfinance is not installed. Run `pip install yfinance` "
+                "(see requirements.txt) to enable real-market-data mode, "
+                "or continue using generate_simulated_dataset()."
+            )
+
+        try:
+            start_ts = time.perf_counter()
+            ticker_obj = yf.Ticker(ticker)
+            hist = ticker_obj.history(period=period, interval=interval)
+
+            if hist is None or hist.empty:
+                raise QuantEngineError(
+                    f"Yahoo Finance returned no data for ticker '{ticker}' "
+                    f"(period={period}, interval={interval}). Verify the "
+                    f"symbol is valid and not delisted."
+                )
+            if len(hist) < 40:
+                raise QuantEngineError(
+                    f"Only {len(hist)} rows returned for '{ticker}'; need "
+                    f"at least 40 to support stable downstream statistics "
+                    f"(MLE variance estimate + 4-way quantile tiering). "
+                    f"Try a longer `period`."
+                )
+
+            required_cols = {"Open", "High", "Low", "Close", "Volume"}
+            missing = required_cols - set(hist.columns)
+            if missing:
+                raise QuantEngineError(
+                    f"Yahoo Finance response for '{ticker}' is missing "
+                    f"expected columns: {missing}."
+                )
+
+            close = hist["Close"].to_numpy(dtype=np.float64)
+            high = hist["High"].to_numpy(dtype=np.float64)
+            low = hist["Low"].to_numpy(dtype=np.float64)
+            volume = hist["Volume"].to_numpy(dtype=np.float64)
+            prev_close = np.concatenate([[close[0]], close[:-1]])
+
+            if np.any(close <= 0):
+                raise QuantEngineError(
+                    f"'{ticker}' price history contains non-positive "
+                    f"close prices; cannot compute log-returns."
+                )
+
+            # -- Map real OHLCV fields onto the existing internal schema --
+            base_price_ticker = close
+
+            vol_min, vol_max = float(volume.min()), float(volume.max())
+            vol_span = (vol_max - vol_min) if (vol_max - vol_min) > 1e-9 else 1.0
+            passenger_velocity = (volume - vol_min) / vol_span * 100.0
+
+            matrix_distance = np.clip(
+                (high - low) / close * 100.0, 1e-6, None
+            )
+
+            surcharges = np.abs((close - prev_close) / prev_close) * 100.0
+
+            df = pd.DataFrame({
+                "timestamp": hist.index,
+                "passenger_velocity": passenger_velocity,
+                "matrix_distance": matrix_distance,
+                "base_price_ticker": base_price_ticker,
+                "surcharges": surcharges,
+            })
+
+            self.dataset = df
+            self.n_records = len(df)
+            self._data_source = f"yfinance:{ticker}:{period}:{interval}"
+
+            elapsed = time.perf_counter() - start_ts
+            logger.info(
+                "generate_real_dataset: fetched %d rows for '%s' "
+                "(period=%s, interval=%s) in %.4fs",
+                len(df), ticker, period, interval, elapsed
+            )
+            return df
+
+        except QuantEngineError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "generate_real_dataset failed for ticker '%s': %s\n%s",
+                ticker, exc, traceback.format_exc()
+            )
+            raise QuantEngineError(
+                f"Failed to fetch real market data for '{ticker}': {exc}"
+            ) from exc
+
+    def generate_multi_asset_universe(self, tickers, period="1y", interval="1d"):
+        """
+        Fetches real historical Close prices for MULTIPLE tickers and
+        computes a genuine, data-driven expected-return vector and
+        covariance matrix across them -- used as a real-data replacement
+        for `_build_distance_tier_assets` in the portfolio optimizer, so
+        the minimum-variance allocation is solved over actual distinct
+        equities rather than synthetic distance buckets of one series.
+
+        Args:
+            tickers (list[str]): e.g. ["AAPL", "MSFT", "GOOGL", "AMZN"].
+                At least 2 tickers are required for a meaningful
+                covariance matrix.
+            period (str): yfinance lookback window.
+            interval (str): bar size.
+
+        Returns:
+            tuple(np.ndarray, np.ndarray, list[str]): (expected_returns,
+                cov_matrix, aligned_ticker_labels). Both arrays are
+                annualized (assuming daily bars; see note below for other
+                intervals).
+
+        Raises:
+            QuantEngineError: if `yfinance` is unavailable, fewer than 2
+                tickers are supplied, any ticker fails to fetch, or the
+                fetched series can't be aligned to a common length.
+        """
+        if not YFINANCE_AVAILABLE:
+            raise QuantEngineError(
+                "yfinance is not installed. Run `pip install yfinance` "
+                "to enable real multi-asset portfolio mode."
+            )
+        if not tickers or len(tickers) < 2:
+            raise QuantEngineError(
+                f"generate_multi_asset_universe requires at least 2 "
+                f"tickers; got {len(tickers) if tickers else 0}."
+            )
+
+        try:
+            per_ticker_returns = []
+            valid_labels = []
+
+            for symbol in tickers:
+                hist = yf.Ticker(symbol).history(period=period, interval=interval)
+                if hist is None or hist.empty or len(hist) < 20:
+                    logger.warning(
+                        "generate_multi_asset_universe: skipping '%s' "
+                        "(insufficient data returned).", symbol
+                    )
+                    continue
+                close = hist["Close"].to_numpy(dtype=np.float64)
+                if np.any(close <= 0):
+                    logger.warning(
+                        "generate_multi_asset_universe: skipping '%s' "
+                        "(non-positive prices).", symbol
+                    )
+                    continue
+                log_returns = np.diff(np.log(close))
+                per_ticker_returns.append(log_returns)
+                valid_labels.append(symbol)
+
+            if len(per_ticker_returns) < 2:
+                raise QuantEngineError(
+                    "Fewer than 2 tickers returned usable data; cannot "
+                    "build a covariance matrix."
+                )
+
+            min_len = min(r.size for r in per_ticker_returns)
+            aligned = np.vstack([r[-min_len:] for r in per_ticker_returns])
+
+            # Trading-day annualization factor; if `interval` is not daily
+            # bars, this scaling no longer represents an annual figure and
+            # should be treated as a relative (not literal annualized)
+            # magnitude.
+            annualization_factor = 252.0 if interval == "1d" else 1.0
+
+            expected_returns = np.mean(aligned, axis=1) * annualization_factor
+            cov_matrix = np.cov(aligned) * annualization_factor
+            cov_matrix = np.atleast_2d(cov_matrix)
+
+            logger.info(
+                "generate_multi_asset_universe: built covariance matrix "
+                "for %d tickers (%s) from %d aligned observations.",
+                len(valid_labels), valid_labels, min_len
+            )
+            return expected_returns, cov_matrix, valid_labels
+
+        except QuantEngineError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "generate_multi_asset_universe failed: %s\n%s",
+                exc, traceback.format_exc()
+            )
+            raise QuantEngineError(
+                f"Failed to build multi-asset universe: {exc}"
+            ) from exc
+
+    def fetch_ohlcv_for_chart(self, ticker="AAPL", period="6mo", interval="1d",
+                               max_points=180):
+        """
+        Fetches raw OHLCV (Open/High/Low/Close/Volume) bars for a single
+        ticker, shaped for direct consumption by a candlestick/financial
+        chart on the frontend -- deliberately kept separate from
+        `generate_real_dataset`, which instead REMAPS real data onto the
+        engine's internal synthetic-schema column names for the
+        MLE/SDE/ridge/fuzzy pipeline. This method exists purely for
+        visualization and does not touch `self.dataset`.
+
+        Args:
+            ticker (str): ticker symbol, e.g. "AAPL".
+            period (str): yfinance lookback window.
+            interval (str): yfinance bar size.
+            max_points (int): downsamples to at most this many bars so the
+                JSON payload and chart rendering stay fast regardless of
+                the requested lookback window.
+
+        Returns:
+            dict: {
+                "ticker": str,
+                "bars": [{"t": epoch_ms, "o": float, "h": float,
+                           "l": float, "c": float, "v": float}, ...],
+                "currency": str | None,
+            }
+
+        Raises:
+            QuantEngineError: if yfinance is unavailable, the ticker is
+                invalid, or no data is returned.
+        """
+        if not YFINANCE_AVAILABLE:
+            raise QuantEngineError(
+                "yfinance is not installed. Run `pip install yfinance` "
+                "to enable the stock chart endpoint."
+            )
+
+        try:
+            ticker_obj = yf.Ticker(ticker)
+            hist = ticker_obj.history(period=period, interval=interval)
+
+            if hist is None or hist.empty:
+                raise QuantEngineError(
+                    f"No chart data returned for ticker '{ticker}' "
+                    f"(period={period}, interval={interval})."
+                )
+
+            if len(hist) > max_points:
+                stride = max(1, len(hist) // max_points)
+                hist = hist.iloc[::stride].tail(max_points)
+
+            bars = []
+            for idx, row in hist.iterrows():
+                bars.append({
+                    "t": int(idx.timestamp() * 1000),
+                    "o": float(row["Open"]),
+                    "h": float(row["High"]),
+                    "l": float(row["Low"]),
+                    "c": float(row["Close"]),
+                    "v": float(row["Volume"]),
+                })
+
+            currency = None
+            try:
+                currency = ticker_obj.fast_info.get("currency")
+            except Exception:
+                # fast_info is best-effort metadata; its absence should
+                # never fail the whole chart request.
+                pass
+
+            logger.info(
+                "fetch_ohlcv_for_chart: returned %d bars for '%s'.",
+                len(bars), ticker
+            )
+            return {"ticker": ticker.upper(), "bars": bars, "currency": currency}
+
+        except QuantEngineError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "fetch_ohlcv_for_chart failed for '%s': %s\n%s",
+                ticker, exc, traceback.format_exc()
+            )
+            raise QuantEngineError(
+                f"Failed to fetch chart data for '{ticker}': {exc}"
+            ) from exc
+
+    def warm_up(self, mode="synthetic", ticker="AAPL", period="2y", interval="1d"):
         """
         Idempotently ensures the engine has a populated dataset, timing the
         operation for observability. Intended to be called exactly once at
         Flask application startup so the first inbound HTTP request never
         pays the dataset-generation cost.
 
+        Args:
+            mode (str): either "synthetic" (default, always available, no
+                network dependency) or "real" (fetches live data for
+                `ticker` via yfinance). If "real" mode fails for any
+                reason -- no internet, invalid ticker, yfinance not
+                installed -- the engine automatically falls back to
+                synthetic mode rather than leaving the application unable
+                to boot.
+            ticker (str): ticker symbol used only when mode="real".
+            period (str): yfinance lookback window, used only when
+                mode="real".
+            interval (str): yfinance bar size, used only when mode="real".
+
         Raises:
-            QuantEngineError: propagated from `generate_simulated_dataset`
-                if generation fails.
+            QuantEngineError: only if BOTH the requested mode fails AND
+                the synthetic fallback also fails (which would indicate a
+                deeper environment problem, not a network issue).
         """
         if self._is_warmed and self.dataset is not None:
             logger.info("warm_up: engine already warm, skipping regeneration.")
             return
 
         start_ts = time.perf_counter()
-        self.generate_simulated_dataset()
+
+        if mode == "real":
+            try:
+                self.generate_real_dataset(ticker=ticker, period=period, interval=interval)
+            except QuantEngineError as exc:
+                logger.warning(
+                    "warm_up: real-data mode failed (%s); falling back "
+                    "to synthetic dataset so the application can still "
+                    "boot.", exc
+                )
+                self.generate_simulated_dataset()
+        else:
+            self.generate_simulated_dataset()
+
         self._last_warm_duration_sec = time.perf_counter() - start_ts
         self._is_warmed = True
         logger.info(
-            "warm_up: engine pre-warmed with %d records in %.4fs",
-            self.n_records, self._last_warm_duration_sec
+            "warm_up: engine pre-warmed with %d records in %.4fs (mode=%s)",
+            self.n_records, self._last_warm_duration_sec, mode
         )
 
     def _ensure_warm(self):
@@ -1009,6 +1373,41 @@ class AdvancedQuantEngine:
     # --------------------------------------------------------------------- #
     # ORCHESTRATION: FULL END-TO-END ANALYTICAL PASS
     # --------------------------------------------------------------------- #
+    def set_multi_asset_universe(self, tickers, period="1y", interval="1d"):
+        """
+        Fetches and caches a real multi-ticker covariance universe (via
+        `generate_multi_asset_universe`) so the NEXT call to
+        `run_full_analysis` uses it for portfolio optimization instead of
+        the synthetic distance-tier buckets. Call this once after
+        `warm_up()` and before hitting the analysis endpoint, or re-call
+        it whenever the desired ticker basket changes.
+
+        Args:
+            tickers (list[str]): tickers to include in the portfolio
+                universe, e.g. ["AAPL", "MSFT", "GOOGL", "AMZN"].
+            period (str): yfinance lookback window.
+            interval (str): yfinance bar size.
+
+        Raises:
+            QuantEngineError: propagated from `generate_multi_asset_universe`.
+        """
+        expected_returns, cov_matrix, labels = self.generate_multi_asset_universe(
+            tickers=tickers, period=period, interval=interval
+        )
+        self._multi_asset_universe = {
+            "expected_returns": expected_returns,
+            "cov_matrix": cov_matrix,
+            "labels": labels,
+        }
+        logger.info(
+            "set_multi_asset_universe: cached real portfolio universe "
+            "for %s.", labels
+        )
+
+    def clear_multi_asset_universe(self):
+        """Reverts `run_full_analysis` to the synthetic distance-tier portfolio."""
+        self._multi_asset_universe = None
+
     def _build_distance_tier_assets(self, n_tiers=4):
         """
         Buckets the warmed dataset into `n_tiers` distance-based quantile
@@ -1124,7 +1523,18 @@ class AdvancedQuantEngine:
             ridge_result = self.custom_ridge_regression(alpha=ridge_alpha)
 
             # --- 5. Data-driven portfolio optimization -------------------------
-            expected_returns, cov_matrix = self._build_distance_tier_assets(n_tiers=4)
+            # Uses a real multi-ticker covariance universe if one has been
+            # cached via set_multi_asset_universe(); otherwise falls back
+            # to the synthetic distance-tier buckets built from this
+            # engine's own single-series dataset.
+            if self._multi_asset_universe is not None:
+                expected_returns = self._multi_asset_universe["expected_returns"]
+                cov_matrix = self._multi_asset_universe["cov_matrix"]
+                asset_labels = self._multi_asset_universe["labels"]
+            else:
+                expected_returns, cov_matrix = self._build_distance_tier_assets(n_tiers=4)
+                asset_labels = ["short_haul", "mid_haul", "long_haul", "extended_haul"]
+
             portfolio_result = self.optimize_portfolio_allocation(
                 expected_returns=expected_returns, cov_matrix=cov_matrix
             )
@@ -1192,13 +1602,14 @@ class AdvancedQuantEngine:
                     "n_records": int(len(df)),
                     "computation_time_ms": round(elapsed * 1000.0, 3),
                     "generated_at_utc": datetime.utcnow().isoformat() + "Z",
+                    "data_source": self._data_source,
                 },
                 "mle": mle_result,
                 "sde_forecast": sde_forecast_payload,
                 "ridge_regression": ridge_result,
                 "portfolio_allocation": {
                     **portfolio_result,
-                    "asset_labels": ["short_haul", "mid_haul", "long_haul", "extended_haul"],
+                    "asset_labels": asset_labels,
                     "expected_returns_input": [float(v) for v in expected_returns],
                 },
                 "fuzzy_risk": fuzzy_result,

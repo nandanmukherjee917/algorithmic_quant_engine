@@ -147,6 +147,42 @@
         </section>
 
         <!-- =============================================================
+             REAL MARKET DATA: STOCK PRICE + VOLUME CHART
+             ============================================================= -->
+        <section class="stock-panel-section" aria-label="Live stock chart">
+            <article class="panel panel--stock">
+                <div class="panel-header">
+                    <h2>LIVE EQUITY CHART &middot; PRICE &amp; VOLUME</h2>
+                    <form class="ticker-form" id="tickerForm">
+                        <input
+                            type="text"
+                            id="tickerInput"
+                            class="ticker-input"
+                            value="AAPL"
+                            maxlength="12"
+                            autocomplete="off"
+                            spellcheck="false"
+                            aria-label="Ticker symbol"
+                            placeholder="e.g. AAPL"
+                        >
+                        <select id="tickerPeriod" class="ticker-select" aria-label="Lookback period">
+                            <option value="1mo">1M</option>
+                            <option value="6mo" selected>6M</option>
+                            <option value="1y">1Y</option>
+                            <option value="5y">5Y</option>
+                        </select>
+                        <button type="submit" class="ticker-submit">LOAD</button>
+                    </form>
+                    <span class="panel-badge" id="stockBadge">&mdash;</span>
+                </div>
+                <div class="panel-chart-wrap panel-chart-wrap--stock">
+                    <canvas id="stockPriceVolumeChart"></canvas>
+                </div>
+                <div class="panel-footnote" id="stockFootnote">Enter a ticker and press LOAD.</div>
+            </article>
+        </section>
+
+        <!-- =============================================================
              ANALYTICAL DETAIL FOOTER
              ============================================================= -->
         <section class="detail-grid" aria-label="Analytical detail panels">

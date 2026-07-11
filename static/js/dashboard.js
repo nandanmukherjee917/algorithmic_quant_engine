@@ -25,6 +25,9 @@
     /** Endpoint the dashboard polls for the full analytical payload. */
     const COMPUTE_ENDPOINT = "/api/compute-quant-matrix";
 
+    /** Endpoint used for the real per-ticker stock price/volume chart. */
+    const STOCK_CHART_ENDPOINT = "/api/stock-chart";
+
     /** Polling cadence, in milliseconds, simulating a live tick stream. */
     const POLL_INTERVAL_MS = 4000;
 
@@ -59,6 +62,7 @@
                 forecast: null,
                 allocation: null,
                 velocity: null,
+                stock: null,
             };
             this.requestCount = 0;
             this.isPolling = false;
@@ -75,8 +79,10 @@
             this._cacheDomRefs();
             this._startClock();
             this._initCharts();
+            this._bindTickerForm();
             this._pollOnce();
             this._startPolling();
+            this._loadStockChart("AAPL", "6mo");
 
             window.addEventListener("beforeunload", () => this._stopPolling());
         }
@@ -97,6 +103,8 @@
                 "statRecords", "statPaths", "statPortfolioVol",
                 "statExpectedReturn", "statPollInterval", "statRequestCount",
                 "systemBadge",
+                "tickerForm", "tickerInput", "tickerPeriod", "stockBadge",
+                "stockFootnote",
             ];
             ids.forEach((id) => { this.els[id] = document.getElementById(id); });
 
@@ -412,6 +420,41 @@
                     options: this._velocityChartOptions(),
                 });
             }
+
+            const stockCtx = document.getElementById("stockPriceVolumeChart");
+            if (stockCtx) {
+                this.charts.stock = new Chart(stockCtx, {
+                    data: {
+                        labels: [],
+                        datasets: [
+                            {
+                                type: "bar",
+                                label: "Volume",
+                                data: [],
+                                backgroundColor: COLORS.violetDim,
+                                yAxisID: "yVolume",
+                                order: 2,
+                                barPercentage: 0.9,
+                                categoryPercentage: 0.9,
+                            },
+                            {
+                                type: "line",
+                                label: "Close Price",
+                                data: [],
+                                borderColor: COLORS.cyan,
+                                backgroundColor: COLORS.cyanDim,
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                tension: 0.15,
+                                yAxisID: "yPrice",
+                                order: 1,
+                                fill: false,
+                            },
+                        ],
+                    },
+                    options: this._stockChartOptions(),
+                });
+            }
         }
 
         _sharedGridOptions() {
@@ -419,6 +462,43 @@
                 grid: { color: COLORS.gridLine, drawTicks: false },
                 ticks: { color: COLORS.textTertiary, font: { size: 10 } },
                 border: { color: COLORS.gridLine },
+            };
+        }
+
+        _stockChartOptions() {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 380 },
+                interaction: { mode: "index", intersect: false },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: "bottom",
+                        labels: { color: COLORS.textSecondary, boxWidth: 10, font: { size: 10.5 } },
+                    },
+                    tooltip: {
+                        backgroundColor: "#0f1730",
+                        borderColor: "#24314f",
+                        borderWidth: 1,
+                        titleColor: COLORS.textPrimary,
+                        bodyColor: COLORS.textSecondary,
+                    },
+                },
+                scales: {
+                    x: { ...this._sharedGridOptions(), ticks: { ...this._sharedGridOptions().ticks, maxTicksLimit: 8 } },
+                    yPrice: {
+                        ...this._sharedGridOptions(),
+                        position: "left",
+                        title: { display: true, text: "Price", color: COLORS.textTertiary, font: { size: 10 } },
+                    },
+                    yVolume: {
+                        position: "right",
+                        grid: { display: false },
+                        ticks: { color: COLORS.textTertiary, font: { size: 9 } },
+                        title: { display: true, text: "Volume", color: COLORS.textTertiary, font: { size: 10 } },
+                    },
+                },
             };
         }
 
@@ -623,6 +703,113 @@
                 fill: true,
             }];
             chart.update("none");
+        }
+
+        // -------------------------------------------------------------- //
+        // REAL STOCK PRICE / VOLUME CHART
+        // -------------------------------------------------------------- //
+
+        /** Binds the ticker search form's submit handler (once, at init). */
+        _bindTickerForm() {
+            if (!this.els.tickerForm) return;
+            this.els.tickerForm.addEventListener("submit", (evt) => {
+                evt.preventDefault();
+                const ticker = (this.els.tickerInput.value || "AAPL").trim().toUpperCase();
+                const period = this.els.tickerPeriod ? this.els.tickerPeriod.value : "6mo";
+                if (!ticker) return;
+                this._loadStockChart(ticker, period);
+            });
+        }
+
+        /**
+         * Fetches and renders real OHLCV data for a single ticker via
+         * `/api/stock-chart`. Isolated from the main polling loop -- this
+         * only runs on initial load and whenever the user submits the
+         * ticker form, not on the 4-second interval.
+         *
+         * @param {string} ticker - e.g. "AAPL".
+         * @param {string} period - yfinance lookback window, e.g. "6mo".
+         */
+        async _loadStockChart(ticker, period) {
+            const submitBtn = this.els.tickerForm
+                ? this.els.tickerForm.querySelector(".ticker-submit")
+                : null;
+
+            if (submitBtn) submitBtn.disabled = true;
+            this._setText(this.els.stockFootnote, `Fetching ${ticker}\u2026`);
+
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+                let response;
+                try {
+                    response = await fetch(
+                        `${STOCK_CHART_ENDPOINT}?ticker=${encodeURIComponent(ticker)}&period=${encodeURIComponent(period)}`,
+                        { headers: { "Accept": "application/json" }, signal: controller.signal }
+                    );
+                } finally {
+                    clearTimeout(timeoutId);
+                }
+
+                if (!response.ok) {
+                    let detail = `HTTP ${response.status}`;
+                    try {
+                        const errBody = await response.json();
+                        if (errBody && errBody.message) detail = errBody.message;
+                    } catch (_e) { /* non-JSON error body, keep bare status */ }
+                    throw new Error(detail);
+                }
+
+                const payload = await response.json();
+                this._renderStockChart(payload);
+            } catch (err) {
+                console.error("QuantDashboard: stock chart fetch failed:", err);
+                this._setText(
+                    this.els.stockFootnote,
+                    `Could not load ${ticker}: ${err.message || "unknown error"}`
+                );
+                this.els.stockFootnote.classList.add("stock-status-message");
+                if (this.els.stockBadge) this.els.stockBadge.textContent = "ERROR";
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
+            }
+        }
+
+        /**
+         * Renders the fetched OHLCV payload into the dual-axis price
+         * (line) + volume (bar) Chart.js instance.
+         *
+         * @param {Object} payload - { ticker, bars: [{t,o,h,l,c,v}], currency }
+         */
+        _renderStockChart(payload) {
+            const chart = this.charts.stock;
+            if (!chart || !payload || !Array.isArray(payload.bars) || payload.bars.length === 0) {
+                this._setText(this.els.stockFootnote, "No bars returned for this ticker.");
+                return;
+            }
+
+            const bars = payload.bars;
+            const labels = bars.map((bar) => {
+                const d = new Date(bar.t);
+                return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+            });
+
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = bars.map((bar) => bar.v);
+            chart.data.datasets[1].data = bars.map((bar) => bar.c);
+            chart.update();
+
+            this.els.stockFootnote.classList.remove("stock-status-message");
+            const first = bars[0].c;
+            const last = bars[bars.length - 1].c;
+            const pctChange = first !== 0 ? ((last - first) / first) * 100 : 0;
+            const sign = pctChange >= 0 ? "+" : "";
+            const currency = payload.currency ? ` ${payload.currency}` : "";
+            this._setText(
+                this.els.stockFootnote,
+                `${payload.ticker}: ${bars.length} bars \u00b7 ${sign}${pctChange.toFixed(2)}% over range \u00b7 last close ${last.toFixed(2)}${currency}`
+            );
+            if (this.els.stockBadge) this.els.stockBadge.textContent = payload.ticker;
         }
 
         // -------------------------------------------------------------- //
