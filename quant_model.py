@@ -107,6 +107,7 @@ class AdvancedQuantEngine:
     DISTANCE_MIN_MI = 0.1
     DISTANCE_MAX_MI = 42.0
     BASE_FARE_FLOOR = 2.50
+    STOCK_LIKE_START_PRICE = 180.00
     SURCHARGE_MAX = 7.75
 
     def __init__(self, n_records=125_000, n_sde_paths=200, n_sde_steps=252,
@@ -238,13 +239,36 @@ class AdvancedQuantEngine:
             # later by the portfolio optimizer) carry meaningfully distinct
             # volatility profiles rather than all sampling the same
             # underlying homoskedastic process.
-            dt = 1.0 / 390.0  # ~ one simulated trading-minute fraction
-            underlying_mu = 0.00042
-            base_sigma = 0.008
+            #
+            # underlying_mu / base_sigma are ANNUALIZED GBM parameters (not
+            # per-tick figures) -- deliberately set in the realistic range
+            # for a single equity (long-run drift ~5-10%/yr, volatility
+            # ~15-35%/yr). Earlier revisions used taxi-fare-scale values
+            # here (sub-1% annualized volatility), which is dimensionally
+            # valid but visually produces an almost perfectly flat SDE
+            # forecast chart, since real chart movement scales with sigma,
+            # not with the number of simulated points.
+            # dt MUST be expressed as a fraction of a YEAR, since mu/sigma
+            # here are annualized GBM parameters (matching the convention
+            # used by compute_mle_drift_volatility and euler_maruyama_gbm
+            # elsewhere in this class). A prior revision set dt = 1/390,
+            # intending "one simulated one-minute bar out of a 390-minute
+            # trading day" -- but used it directly as a year-fraction,
+            # making each tick 252x too large a time-step. Compounded over
+            # 125,000 rows, that silently simulated ~320 YEARS of drift and
+            # volatility into a single synthetic dataset, which stayed
+            # invisible only because sigma was also tuned unrealistically
+            # small (0.008). Raising sigma to a realistic equity-like value
+            # without fixing this exposed the bug: prices exploded to
+            # astronomical figures. The correct dt for a one-minute bar is
+            # 1 / (390 minutes/day * 252 trading days/year).
+            dt = 1.0 / (390.0 * 252.0)  # one 1-minute bar, as a fraction of a trading year
+            underlying_mu = 0.08
+            base_sigma = 0.22
             normalized_distance = (matrix_distance - self.DISTANCE_MIN_MI) / (
                 self.DISTANCE_MAX_MI - self.DISTANCE_MIN_MI
             )
-            sigma_t = base_sigma * (1.0 + 1.4 * normalized_distance)
+            sigma_t = base_sigma * (1.0 + 0.6 * normalized_distance)
 
             z = self._rng.standard_normal(n)
             log_increments = (
@@ -252,7 +276,7 @@ class AdvancedQuantEngine:
                 + sigma_t * np.sqrt(dt) * z
             )
             log_path = np.cumsum(log_increments)
-            base_price_ticker = self.BASE_FARE_FLOOR * np.exp(log_path)
+            base_price_ticker = self.STOCK_LIKE_START_PRICE * np.exp(log_path)
             # Guarantee a sane floor so log() is always well-defined downstream.
             base_price_ticker = np.maximum(base_price_ticker, 0.01)
 
@@ -673,7 +697,7 @@ class AdvancedQuantEngine:
     # --------------------------------------------------------------------- #
     # 2. MAXIMUM LIKELIHOOD ESTIMATION OF DRIFT / VOLATILITY
     # --------------------------------------------------------------------- #
-    def compute_mle_drift_volatility(self, price_series=None, dt=1.0 / 390.0):
+    def compute_mle_drift_volatility(self, price_series=None, dt=1.0 / (390.0 * 252.0)):
         """
         Computes the analytical Maximum Likelihood Estimators for the
         drift (mu) and volatility (sigma) parameters of a Geometric

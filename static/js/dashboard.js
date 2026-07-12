@@ -528,7 +528,12 @@
                 },
                 scales: {
                     x: { ...this._sharedGridOptions(), title: { display: true, text: "Forward Step", color: COLORS.textTertiary, font: { size: 10 } } },
-                    y: { ...this._sharedGridOptions(), title: { display: true, text: "Simulated Price (USD)", color: COLORS.textTertiary, font: { size: 10 } } },
+                    y: {
+                        ...this._sharedGridOptions(),
+                        title: { display: true, text: "Simulated Price (USD)", color: COLORS.textTertiary, font: { size: 10 } },
+                        beginAtZero: false,
+                        ticks: { ...this._sharedGridOptions().ticks, precision: 4, maxTicksLimit: 6 },
+                    },
                 },
             };
         }
@@ -595,7 +600,7 @@
                 datasets.push({
                     label: `Path ${idx + 1}`,
                     data: path,
-                    borderColor: "rgba(139, 124, 255, 0.22)",
+                    borderColor: "rgba(139, 124, 255, 0.38)",
                     borderWidth: 1,
                     pointRadius: 0,
                     tension: 0.15,
